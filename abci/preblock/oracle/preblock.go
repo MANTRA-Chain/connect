@@ -3,6 +3,7 @@ package oracle
 import (
 	"fmt"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/cosmos/cosmos-sdk/types/module"
@@ -142,6 +143,24 @@ func (h *PreBlockHandler) WrappedPreBlocker(mm *module.Manager) sdk.PreBlocker {
 
 			return response, err
 		}
+
+		priceAttrs := []sdk.Attribute{}
+
+		for k, v := range prices {
+			priceAttrs = append(priceAttrs, sdk.NewAttribute(k.String(), v.String()))
+		}
+
+		sort.Slice(priceAttrs, func(i, j int) bool {
+			return priceAttrs[i].Key < priceAttrs[j].Key
+		})
+
+		sdkCtx := sdk.UnwrapSDKContext(ctx)
+		sdkCtx.EventManager().EmitEvent(
+			sdk.NewEvent(
+				"oracle_prices",
+				priceAttrs...,
+			),
+		)
 
 		return response, nil
 	}

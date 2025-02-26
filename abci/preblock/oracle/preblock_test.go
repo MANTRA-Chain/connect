@@ -402,6 +402,31 @@ func (s *PreBlockTestSuite) TestPreBlocker() {
 
 			require.Equal(s.T(), uint64(1), nonce)
 		}
+
+		event := s.ctx.EventManager().Events()[len(s.ctx.EventManager().Events())-1]
+		s.Require().Equal("oracle_prices", event.Type)
+		s.Require().Equal(3, len(event.Attributes))
+
+		// check the event matches the expected event
+		expectedPriceAttrs := []sdk.Attribute{}
+		for idx, cp := range s.currencyPairs {
+			var bigIntPrice big.Int
+			if err := bigIntPrice.GobDecode(prices[uint64(idx)]); err != nil { //nolint:gosec
+				s.T().Fatal(err)
+			}
+			expectedPriceAttrs = append(expectedPriceAttrs, sdk.NewAttribute(
+				cp.String(),
+				bigIntPrice.String(),
+			))
+		}
+
+		s.Require().Equal(
+			sdk.NewEvent(
+				"oracle_prices",
+				expectedPriceAttrs...,
+			),
+			event,
+		)
 	})
 }
 
