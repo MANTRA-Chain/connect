@@ -3,8 +3,8 @@ project_name: connect
 
 release:
   github:
-    owner: skip-mev
-    name: connect
+    owner: "{{ .Env.REPO_OWNER }}"
+    name: "{{ .Env.REPO_NAME }}"
   prerelease: true
 
 builds:
