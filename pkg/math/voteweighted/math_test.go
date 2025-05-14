@@ -10,7 +10,7 @@ import (
 	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	ccvtypes "github.com/cosmos/interchain-security/v6/x/ccv/consumer/types"
+	ccvtypes "github.com/cosmos/interchain-security/v7/x/ccv/consumer/types"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/skip-mev/connect/v2/abci/testutils"
