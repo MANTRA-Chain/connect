@@ -52,6 +52,7 @@ func (s *MathTestSuite) TestMedian() {
 		validators        []validator
 		totalBondedTokens sdkmath.Int
 		expectedPrices    map[connecttypes.CurrencyPair]*big.Int
+		expectedCcvPrices map[connecttypes.CurrencyPair]*big.Int
 	}{
 		{
 			name:           "no providers",
@@ -278,6 +279,31 @@ func (s *MathTestSuite) TestMedian() {
 				}: big.NewInt(300),
 			},
 		},
+		{
+			name: "totalBondedTokens is zero",
+			providerPrices: aggregator.AggregatedProviderData[string, map[connecttypes.CurrencyPair]*big.Int]{
+				validator1.String(): map[connecttypes.CurrencyPair]*big.Int{
+					{
+						Base:  "BTC",
+						Quote: "USD",
+					}: big.NewInt(100),
+				},
+			},
+			validators: []validator{
+				{
+					stake:    sdkmath.NewInt(100),
+					consAddr: validator1,
+				},
+			},
+			totalBondedTokens: sdkmath.NewInt(0),
+			expectedPrices:    map[connecttypes.CurrencyPair]*big.Int{},
+			expectedCcvPrices: map[connecttypes.CurrencyPair]*big.Int{
+				{
+					Base:  "BTC",
+					Quote: "USD",
+				}: big.NewInt(100),
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -295,9 +321,16 @@ func (s *MathTestSuite) TestMedian() {
 
 			// Verify the results.
 			s.Require().Len(defaultResult, len(tc.expectedPrices))
-			s.Require().Len(ccvResult, len(tc.expectedPrices))
 			for currencyPair, expectedPrice := range tc.expectedPrices {
 				s.Require().Equal(expectedPrice, defaultResult[currencyPair])
+			}
+
+			expectedCcvPrices := tc.expectedPrices
+			if tc.expectedCcvPrices != nil {
+				expectedCcvPrices = tc.expectedCcvPrices
+			}
+			s.Require().Len(ccvResult, len(expectedCcvPrices))
+			for currencyPair, expectedPrice := range expectedCcvPrices {
 				s.Require().Equal(expectedPrice, ccvResult[currencyPair])
 			}
 		})
