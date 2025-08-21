@@ -40,7 +40,7 @@ const (
 	yes                   = "yes"
 	deposit               = 1000000
 	userMnemonic          = "foster poverty abstract scorpion short shrimp tilt edge romance adapt only benefit moral another where host egg echo ability wisdom lizard lazy pool roast"
-	userAccountAddressHex = "877E307618AB73E009A978AC32E0264791F6D40A"
+	userAccountAddressHex = "70990fdcf97778b6fef25915ea6b2da94d131208"
 	gasPrice              = 100
 )
 
