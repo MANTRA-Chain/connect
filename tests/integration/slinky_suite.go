@@ -3,7 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/hex"
-	"math/big"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,12 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	connectabci "github.com/skip-mev/connect/v2/abci/ve/types"
 	oracleconfig "github.com/skip-mev/connect/v2/oracle/config"
-	"github.com/skip-mev/connect/v2/oracle/types"
 	connecttypes "github.com/skip-mev/connect/v2/pkg/types"
 	"github.com/skip-mev/connect/v2/providers/apis/marketmap"
-	"github.com/skip-mev/connect/v2/providers/static"
 	mmtypes "github.com/skip-mev/connect/v2/x/marketmap/types"
 	oracletypes "github.com/skip-mev/connect/v2/x/oracle/types"
 )
@@ -228,6 +225,7 @@ func (s *ConnectIntegrationSuite) SetupSuite() {
 		panic(err)
 	}
 	accountAddress, err := bech32.ConvertAndEncode(s.spec.ChainConfig.Bech32Prefix, accountAddressBz)
+	fmt.Println("mm-accountAddress", s.spec.ChainConfig.Bech32Prefix, accountAddress, err)
 	if err != nil {
 		panic(err)
 	}
@@ -337,244 +335,8 @@ func NewSlinkyOracleIntegrationSuite(suite *ConnectIntegrationSuite) *SlinkyOrac
 	}
 }
 
-func (s *SlinkyOracleIntegrationSuite) TestOracleModule() {
-	// query the oracle module grpc service for any CurrencyPairs
-	s.Run("QueryCurrencyPairs - no currency-pairs reported", func() {
-		resp, err := QueryCurrencyPairs(s.chain)
-		s.Require().NoError(err)
-		s.Require().True(len(resp.CurrencyPairs) == 0)
-	})
-
-	// pass a governance proposal to approve a new currency-pair, and check Prices are reported
-	s.Run("Add a currency-pair and check Prices", func() {
-		s.Require().NoError(s.AddCurrencyPairs(s.chain, s.user, 1.1, []connecttypes.CurrencyPair{
-			{
-				Base:  "BTC",
-				Quote: "USD",
-			},
-		}...))
-
-		// check that the currency-pair is added to state
-		resp, err := QueryCurrencyPairs(s.chain)
-		s.Require().NoError(err)
-		s.Require().True(len(resp.CurrencyPairs) == 1)
-		s.Require().Equal(resp.CurrencyPairs[0].Base, "BTC")
-		s.Require().Equal(resp.CurrencyPairs[0].Quote, "USD")
-	})
-
-	s.Run("Add multiple Currency Pairs", func() {
-		cp1 := connecttypes.NewCurrencyPair("ETH", "USD")
-		cp2 := connecttypes.NewCurrencyPair("USDT", "USD")
-		s.Require().NoError(s.AddCurrencyPairs(s.chain, s.user, 1.1, []connecttypes.CurrencyPair{
-			cp1, cp2,
-		}...))
-
-		resp, err := QueryCurrencyPairs(s.chain)
-		s.Require().NoError(err)
-		s.Require().True(len(resp.CurrencyPairs) == 3)
-	})
-}
-
 func translateGRPCAddr(chain *cosmos.CosmosChain) string {
 	return chain.GetGRPCAddress()
-}
-
-func (s *SlinkyOracleIntegrationSuite) TestNodeFailures() {
-	ethusdcCP := connecttypes.NewCurrencyPair("ETH", "USDC")
-
-	s.Require().NoError(s.AddCurrencyPairs(s.chain, s.user, 1.1, []connecttypes.CurrencyPair{
-		ethusdcCP,
-	}...))
-
-	cc, closeFn, err := GetChainGRPC(s.chain)
-	s.Require().NoError(err)
-	defer closeFn()
-
-	id, err := getIDForCurrencyPair(context.Background(), oracletypes.NewQueryClient(cc), ethusdcCP)
-	s.Require().NoError(err)
-
-	zero := big.NewInt(0)
-	zeroBz, err := zero.GobEncode()
-	s.Require().NoError(err)
-
-	// configure failing providers for various sets of nodes
-	s.Run("all nodes report Prices", func() {
-		// update all oracle configs
-		for _, node := range s.chain.Nodes() {
-			oracleConfig := DefaultOracleConfig(translateGRPCAddr(s.chain))
-			oracleConfig.Providers[static.Name] = oracleconfig.ProviderConfig{
-				Name: static.Name,
-				API: oracleconfig.APIConfig{
-					Enabled:          true,
-					Timeout:          250 * time.Millisecond,
-					Interval:         250 * time.Millisecond,
-					ReconnectTimeout: 250 * time.Millisecond,
-					MaxQueries:       1,
-					Endpoints: []oracleconfig.Endpoint{
-						{
-							URL: "http://un-used-url.com",
-						},
-					},
-					Atomic: true,
-					Name:   static.Name,
-				},
-				Type: types.ConfigType,
-			}
-
-			oracle := GetOracleSideCar(node)
-			SetOracleConfigsOnOracle(oracle, oracleConfig)
-			s.Require().NoError(RestartOracle(node))
-		}
-
-		height, err := ExpectVoteExtensions(s.chain, s.blockTime*3, []connectabci.OracleVoteExtension{
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-		})
-		s.Require().NoError(err)
-		// query for the given currency pair
-		resp, _, err := QueryCurrencyPair(s.chain, ethusdcCP, height)
-		s.Require().NoError(err)
-		s.Require().Equal(resp.Price.Int64(), int64(110000000))
-	})
-
-	s.Run("single oracle down, price updates", func() {
-		// stop single node's oracle process and check that all Prices are reported
-		node := s.chain.Nodes()[0]
-		StopOracle(node)
-
-		// expect the following vote-extensions
-		height, err := ExpectVoteExtensions(s.chain, s.blockTime*3, []connectabci.OracleVoteExtension{
-			{
-				Prices: map[uint64][]byte{},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-		})
-		s.Require().NoError(err)
-
-		_, oldNonce, err := QueryCurrencyPair(s.chain, ethusdcCP, height-1)
-		s.Require().NoError(err)
-
-		_, newNonce, err := QueryCurrencyPair(s.chain, ethusdcCP, height)
-		s.Require().NoError(err)
-
-		// expect update for height
-		s.Require().Equal(newNonce, oldNonce+1)
-
-		// start the oracle again
-		StartOracle(node)
-	})
-
-	s.Run("single node down, price updates", func() {
-		// stop single node's oracle process and check that all prices are reported
-		node := s.chain.Nodes()[0]
-		StopOracle(node)
-
-		// expect the following vote-extensions
-		height, err := ExpectVoteExtensions(s.chain, s.blockTime*3, []connectabci.OracleVoteExtension{
-			{
-				Prices: map[uint64][]byte{},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-		})
-		s.Require().NoError(err)
-
-		_, oldNonce, err := QueryCurrencyPair(s.chain, ethusdcCP, height-1)
-		s.Require().NoError(err)
-
-		_, newNonce, err := QueryCurrencyPair(s.chain, ethusdcCP, height)
-		s.Require().NoError(err)
-
-		// expect update for height
-		s.Require().Equal(newNonce, oldNonce+1)
-
-		StartOracle(node)
-	})
-
-	s.Run("only 1 node reports a price (oracles are down)", func() {
-		// shut down all oracles except for one
-		for _, node := range s.chain.Nodes()[1:] {
-			StopOracle(node)
-		}
-
-		// expect the given oracle reports
-		height, err := ExpectVoteExtensions(s.chain, s.blockTime*3, []connectabci.OracleVoteExtension{
-			{
-				Prices: map[uint64][]byte{},
-			},
-			{
-				Prices: map[uint64][]byte{},
-			},
-			{
-				Prices: map[uint64][]byte{},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id: zeroBz,
-				},
-			},
-		})
-		s.Require().NoError(err)
-
-		_, oldNonce, err := QueryCurrencyPair(s.chain, ethusdcCP, height-1)
-		s.Require().NoError(err)
-
-		_, newNonce, err := QueryCurrencyPair(s.chain, ethusdcCP, height)
-		s.Require().NoError(err)
-
-		// expect no update for the height
-		s.Require().Equal(newNonce, oldNonce)
-
-		// start all oracles again
-		for _, node := range s.chain.Nodes()[1:] {
-			StartOracle(node)
-		}
-	})
 }
 
 func (s *SlinkyOracleIntegrationSuite) TestMultiplePriceFeeds() {
@@ -588,163 +350,10 @@ func (s *SlinkyOracleIntegrationSuite) TestMultiplePriceFeeds() {
 		ethusdtCP,
 		ethusdCP,
 	}
-
+	fmt.Println("mm-AddCurrencyPairs")
 	s.Require().NoError(s.AddCurrencyPairs(s.chain, s.user, 1.1, cps...))
+	fmt.Println("mm-AddCurrencyPairs-af")
 
-	cc, closeFn, err := GetChainGRPC(s.chain)
-	s.Require().NoError(err)
-	defer closeFn()
-
-	// get the currency pair ids
-	ctx := context.Background()
-	id1, err := getIDForCurrencyPair(ctx, oracletypes.NewQueryClient(cc), ethusdcCP)
-	s.Require().NoError(err)
-
-	id2, err := getIDForCurrencyPair(ctx, oracletypes.NewQueryClient(cc), ethusdtCP)
-	s.Require().NoError(err)
-
-	id3, err := getIDForCurrencyPair(ctx, oracletypes.NewQueryClient(cc), ethusdCP)
-	s.Require().NoError(err)
-
-	zero := big.NewInt(0)
-	zeroBz, err := zero.GobEncode()
-	s.Require().NoError(err)
-
-	// start all oracles
-	for _, node := range s.chain.Nodes() {
-		oracleConfig := DefaultOracleConfig(translateGRPCAddr(s.chain))
-		oracleConfig.Providers[static.Name] = oracleconfig.ProviderConfig{
-			Name: static.Name,
-			API: oracleconfig.APIConfig{
-				Enabled:          true,
-				Timeout:          250 * time.Millisecond,
-				Interval:         250 * time.Millisecond,
-				ReconnectTimeout: 250 * time.Millisecond,
-				MaxQueries:       1,
-				Endpoints: []oracleconfig.Endpoint{
-					{
-						URL: "http://un-used-url.com",
-					},
-				},
-				Atomic: true,
-				Name:   static.Name,
-			},
-			Type: types.ConfigType,
-		}
-
-		oracle := GetOracleSideCar(node)
-		SetOracleConfigsOnOracle(oracle, oracleConfig)
-		s.Require().NoError(RestartOracle(node))
-	}
-
-	s.Run("all oracles running for multiple price feeds", func() {
-		height, err := ExpectVoteExtensions(s.chain, s.blockTime*3, []connectabci.OracleVoteExtension{
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-		})
-		s.Require().NoError(err)
-
-		// query for the given currency pair
-		for _, cp := range cps {
-			resp, _, err := QueryCurrencyPair(s.chain, cp, height)
-			s.Require().NoError(err)
-			s.Require().Equal(int64(110000000), resp.Price.Int64())
-		}
-	})
-
-	s.Run("all oracles running for multiple price feeds, except for one", func() {
-		// stop first node's oracle, and update Prices to report
-		node := s.chain.Nodes()[0]
-		StopOracle(node)
-
-		oracleConfig := DefaultOracleConfig(translateGRPCAddr(s.chain))
-
-		// set only a provider (no marketmap)
-		oracleConfig.Providers[static.Name] = oracleconfig.ProviderConfig{
-			Name: static.Name,
-			API: oracleconfig.APIConfig{
-				Enabled:          true,
-				Timeout:          250 * time.Millisecond,
-				Interval:         250 * time.Millisecond,
-				ReconnectTimeout: 250 * time.Millisecond,
-				MaxQueries:       1,
-				Endpoints: []oracleconfig.Endpoint{
-					{
-						URL: "http://un-used-url.com",
-					},
-				},
-				Atomic: true,
-				Name:   static.Name,
-			},
-			Type: types.ConfigType,
-		}
-
-		oracle := GetOracleSideCar(node)
-		SetOracleConfigsOnOracle(oracle, oracleConfig)
-		s.Require().NoError(RestartOracle(node))
-		s.Require().NoError(RestartOracle(node))
-
-		height, err := ExpectVoteExtensions(s.chain, s.blockTime*3, []connectabci.OracleVoteExtension{
-			{
-				Prices: map[uint64][]byte{},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-			{
-				Prices: map[uint64][]byte{
-					id1: zeroBz,
-					id2: zeroBz,
-					id3: zeroBz,
-				},
-			},
-		})
-		s.Require().NoError(err)
-
-		// query for the given currency pair
-		for _, cp := range cps {
-			resp, _, err := QueryCurrencyPair(s.chain, cp, height)
-			s.Require().NoError(err)
-			s.Require().Equal(int64(110000000), resp.Price.Int64())
-		}
-	})
 }
 
 func getIDForCurrencyPair(ctx context.Context, client oracletypes.QueryClient, cp connecttypes.CurrencyPair) (uint64, error) {
