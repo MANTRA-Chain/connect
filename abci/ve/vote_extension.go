@@ -238,6 +238,7 @@ func (h *VoteExtensionHandler) VerifyVoteExtensionHandler() sdk.VerifyVoteExtens
 			h.logger.Info(
 				"empty vote extension",
 				"height", req.Height,
+				"validator", sdk.ValAddress(req.ValidatorAddress).String(),
 			)
 
 			return &cometabci.ResponseVerifyVoteExtension{Status: cometabci.ResponseVerifyVoteExtension_ACCEPT}, nil
