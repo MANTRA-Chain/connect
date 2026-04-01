@@ -155,12 +155,14 @@ func (h *PreBlockHandler) WrappedPreBlocker(mm *module.Manager) sdk.PreBlocker {
 		})
 
 		sdkCtx := sdk.UnwrapSDKContext(ctx)
-		sdkCtx.EventManager().EmitEvent(
-			sdk.NewEvent(
-				"oracle_prices",
-				priceAttrs...,
-			),
-		)
+		if len(priceAttrs) > 0 {
+			sdkCtx.EventManager().EmitEvent(
+				sdk.NewEvent(
+					"oracle_prices",
+					priceAttrs...,
+				),
+			)
+		}
 
 		return response, nil
 	}
