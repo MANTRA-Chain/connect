@@ -132,6 +132,13 @@ func Median(
 			// This should never error.
 			panic(err)
 		}
+		if totalBondedTokens.IsZero() {
+			logger.Warn(
+				"total bonded tokens is zero; cannot compute median prices",
+				"total_bonded_tokens", totalBondedTokens.String(),
+			)
+			return prices
+		}
 
 		for currencyPair, info := range priceInfo {
 			// The total voting power % that submitted a price update for the given currency pair must be
